@@ -1,6 +1,6 @@
 # TrustZone-M on csim: ARMv8-M security extension for the Cortex-M33 (nRF54L15)
 
-**Status: COMPLETE (emulator track), extended 2026-09-03 — see *Step 9*.**
+**Status: COMPLETE (emulator track), extended 2026-09-03 — see *Steps 9–10*.**
 Plan written 2026-07-18, implemented through 2026-07-26, re-verified
 2026-07-30 on branch `trustzone`; Step 9 runs the split image under the
 simulation kernel and validates it against hardware. Per-step
@@ -250,6 +250,85 @@ watchdog survive; the **DWT cycle counter** behind `DEMCR.TRCENA`; and an
 **Verified against silicon.** A Seeed XIAO nRF54L15 runs the same two ELFs;
 boot sequence, clock tick rate and the watchdog timeout and reset reason match
 line for line. See `devices/nrf54l15-xiao/HARDWARE-COMPARISON.md`.
+
+## Step 10 (2026-09-03) — attribution and permission enforcement
+
+The attribution unit previously answered "non-secure" for every address, so
+nothing was ever refused. Now:
+
+- **Address attribution** takes a per-SoC hook alongside the SAU. On the
+  nRF54L15 every peripheral answers at two addresses and the alias picks the
+  security, so Non-secure code touching a Secure alias raises a SecureFault
+  before the transaction reaches the bus. Memory is left to the SAU, which the
+  secure world programs with the flash and RAM split and with the callable
+  window holding the veneers. Feeding the memory protection controller's
+  override regions into this decision was tried and reverted: it vetoes the
+  SAU's callable window and breaks every gateway entry. That controller gates
+  bus masters, including DMA, rather than the core's own attribution.
+
+- **Peripheral permission.** All four security-unit instances are modelled:
+  the 64 permission slots each governs, its violation event, address capture
+  and interrupt. The permission registers reset to the values read from a
+  Seeed XIAO nRF54L15 (`nrf54l_spu_perm_reset`): every present peripheral is
+  Secure at reset except the VPR's four slots, and the slots whose mapping is
+  fixed Secure (the instance itself, MPC00, KMU, CRACEN, WDT30, TAMPC and a
+  few more) cannot be opened by any permission write. The MDK's generic reset
+  value 0x8000002A (Non-secure) does not describe the part. Permission writes
+  touch only the attribute, the DMA attribute where the slot has DMA, and the
+  lock, which holds until reset. A Non-secure transaction reaching a Secure
+  peripheral is terminated with an error: the core takes a precise BusFault
+  (CFSR 0x8200, BFAR = the alias used, into the Secure world unless
+  `AIRCR.BFHFNMINS`), the security unit latches the event with the first
+  offender's low 16 address bits (cleared with the event) and pends its
+  level-sensitive interrupt, and MPC00 latches MEMACCERR. The BusFault handler
+  runs before the security unit's interrupt handler (equal priority, lower
+  exception number), so what firmware reports on a violation is its BusFault
+  handler's line. Split peripherals (GPIO, GPIOTE, DPPIC, PPIB, GRTC) attribute
+  per pin or channel through the FEATURE registers; those are stored, not
+  enforced, so a split slot is open to both worlds — on silicon a GPIOTE30
+  channel that was never handed over does fault, which is why the hardware
+  faults earlier than the emulator on the test below. All of this was measured
+  with a probe firmware; the method and numbers are in
+  `devices/nrf54l15-xiao/HARDWARE-COMPARISON.md`.
+  `configs/test-tz-spu-violation-nrf54l15-xiao.yaml` drives a normal world
+  built on the full platform instead of the minimal one and expects the
+  secure world's BusFault report, which is also what the two images print on
+  the XIAO.
+
+- **Non-secure instruction fetch.** Execution from Secure memory is refused at
+  the fetch, before the instruction runs, as an invalid entry point
+  (SecureFault INVEP). From the callable window only `SG` may be fetched, so a
+  Non-secure jump to anything but a gateway entry faults the same way. The
+  attribution lookup is cached per window over which it cannot change — the
+  4 KB page clamped to the SAU region boundaries around the program counter —
+  so a page that holds both the callable window and Secure code is re-checked
+  at each boundary and the ordinary path stays one compare per instruction.
+
+- **TT** reports the Non-secure read and read-write attributes, which is what
+  the secure world's pointer range checks are built from.
+
+- The memory protection controller is modelled as register state so the
+  firmware's configuration reads back.
+
+Three existing unit tests ran Non-secure code from memory they never
+attributed Non-secure, which the fetch check correctly refuses; their setup is
+now realistic. Four tests were added for the fetch rule.
+
+Still deferred: per-feature attribution of the split peripherals (GPIO pins,
+GPIOTE and DPPI channels, GRTC compare channels and interrupt groups: stored,
+not enforced); MPC00's MEMACCERR address registers; DMA-master attribution
+through the memory protection controller. The bundled example's RAM-access-error probe cannot exercise it on
+this chip — it points an `NRF_UARTE2_NS` instance that only the nRF5340 has —
+and the emulator models no Non-secure DMA master on the nRF54L15 at all (the
+console is Secure, the radio is driven by the Secure world), so there is
+nothing to enforce against until one exists. Also deferred: the security
+unit's clock sub-division (stored, not enforced), lazy floating-point state,
+banked priorities and banked SysTick, and `AIRCR.PRIS`.
+
+The radio's ramp-up and ramp-down are still instantaneous; the disabled-event
+delay stands in for the ordering that gives, with a measured window
+(`docs/design/nrf54l15-ack-gap.md`). Everything in the tree passes with it, so
+giving the radio timed state is an improvement rather than a blocker.
 
 ## Verified result (re-measured 2026-07-30, branch `trustzone` @ `87c92b3`)
 

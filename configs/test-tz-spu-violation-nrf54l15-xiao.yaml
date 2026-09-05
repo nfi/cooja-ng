@@ -1,0 +1,31 @@
+# nRF54L15 TrustZone-M peripheral-permission enforcement.  The Non-secure
+# world here is built with the full platform, so it touches peripherals the
+# Secure world claimed; the transaction must terminate with a precise BusFault
+# taken by the Secure world, whose handler reports it and reboots.
+
+version: 2
+title: "nRF54L15 TrustZone-M peripheral-permission violation (XIAO nRF54L15)"
+timeout_ms: 20000
+seed: 42          # same seed => byte-identical run
+
+mote_types:
+  - { name: normal-world-fullplat, firmware: firmware/nrf54l15-xiao/normal-world-fullplat.nrf54l15-xiao, secure_firmware: firmware/nrf54l15-xiao/secure-world-example.nrf54l15-xiao }
+
+nodes:
+  - { type: normal-world-fullplat, id: 1 }
+
+test:
+  description: >
+    A normal world built with the full platform instead of the minimal one, so
+    it reaches for peripherals the secure world has claimed. The security unit
+    refuses the transaction: the core takes a precise BusFault into the secure
+    world (CFSR 0x8200, BFAR = the Non-secure alias it used) and the security
+    unit latches the violation. The secure world's BusFault handler prints its
+    report and resets, before the security unit's own interrupt handler can
+    run. Verified on a Seeed XIAO nRF54L15 with these two images: the same
+    "BF!" line with CF=00008200. Silicon faults earlier, at a GPIOTE30 channel
+    CONFIG (0x4010c51c) whose per-channel attribute is not modelled; the
+    emulator's first refusal is the reset-reason read on CLOCK/POWER/RESET.
+  steps:
+    - { wait: "BF! ", node: 1 }
+    - { wait: "CF=00008200 HF=00000000 BFAR=4010e600", node: 1 }
