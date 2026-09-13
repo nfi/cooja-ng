@@ -1043,6 +1043,42 @@ static void test_debug(void) {
     CHECK(mock_cpu.dbg_count == 1 && mock_cpu.dbg_wp[0].shadow == 0xAB00, "re-armed after a reboot with a fresh shadow");
 }
 
+/* --shell-json: records, escaping, and one "done" per stdin line — after
+ * its block resolves and after a file it sourced has run. */
+static void test_json(void) {
+    char *buf = NULL; size_t len = 0;
+    mock_reset();
+    sh.interactive = true;
+    sh.json = true;
+    sh.out = open_memstream(&buf, &len);
+    const char *p = write_script("j1", "echo in-file\nsleep 10ms\n");
+    char src[300];
+    snprintf(src, sizeof(src), "source %s", p);
+    shell_enqueue_line(&sh, "echo a\\\"b\\\\c\\e\xc3\xa9\xff");   /* echo decodes \" \\ \e */
+    shell_enqueue_line(&sh, "bogus");
+    shell_enqueue_line(&sh, "sleep 1s");
+    shell_enqueue_line(&sh, src);
+    shell_enqueue_line(&sh, "echo last");
+    shell_script_tick(&sh);
+    fflush(sh.out);
+    CHECK(strstr(buf, "{\"type\":\"out\",\"t\":0.000000,\"text\":\"a\\\"b\\\\c\\u001b\xc3\xa9\\u00ff\"}\n") != NULL,
+          "out record escapes quotes, backslashes, control and invalid UTF-8 (%s)", buf);
+    CHECK(strstr(buf, "\"line\":\"bogus\",\"ok\":false,\"error\":\"unknown command") != NULL, "error line: done ok false");
+    CHECK(strstr(buf, "{\"type\":\"error\"") != NULL, "error record");
+    CHECK(strstr(buf, "\"line\":\"sleep 1s\"") == NULL && sh.done_pending, "no done while sleep blocks");
+    advance(1000000000LL); shell_script_tick(&sh); fflush(sh.out);
+    CHECK(strstr(buf, "{\"type\":\"done\",\"t\":1.000000,\"line\":\"sleep 1s\",\"ok\":true}") != NULL, "done when the sleep ends");
+    CHECK(strstr(buf, "in-file") != NULL && strstr(buf, "\"line\":\"source") == NULL, "sourced file runs, its done waits");
+    advance(10000000LL); shell_script_tick(&sh); fflush(sh.out);
+    char *d_src = strstr(buf, "\"line\":\"source");
+    char *d_last = strstr(buf, "\"text\":\"last\"");
+    CHECK(d_src && d_last && d_src < d_last, "source done precedes the next line's output");
+    CHECK(strstr(buf, "\"line\":\"echo last\",\"ok\":true") != NULL && !sh.done_pending, "last line done");
+    fclose(sh.out); sh.out = NULL;
+    free(buf);
+    unlink(p);
+}
+
 int run_shell_tests(int verbose) {
     g_verbose = verbose;
     printf("=== Shell tests ===\n");
@@ -1060,6 +1096,7 @@ int run_shell_tests(int verbose) {
     test_workflow();
     test_environment();
     test_debug();
+    test_json();
     printf("  %d checks passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
 }

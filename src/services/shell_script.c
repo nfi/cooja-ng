@@ -185,6 +185,7 @@ void shell_script_fail(shell_service_t *s, const char *reason) {
         s->failed = true;
         snprintf(s->fail_reason, sizeof(s->fail_reason), "%s", reason);
     }
+    snprintf(s->last_error, sizeof(s->last_error), "%s", reason);
     shell_out(s, "SCRIPT FAILED: %s\n", reason);
     shell_script_abort(s);
     root_finished(s, true);
@@ -717,9 +718,12 @@ void shell_script_tick(shell_service_t *s) {
     int lines = 0;
     while (s->block == SHELL_BLOCK_NONE && !s->restart_pending &&
            !sim_runtime_stop_requested(s->sim) && lines++ < 10000) {
-        bool from_file = s->depth > 0;
+        shell_json_done_check(s, false);
         const char *l = next_line(s, line, sizeof(line));
         if (!l) break;
+        /* After next_line: a file that ended there hands over to stdin. */
+        bool from_file = s->origin.kind == SHELL_ORIGIN_FILE;
+        if (!from_file) shell_json_done_start(s, l);
         if (s->line_is_send) {
             /* A sendfile line: straight to the node, then wait for its prompt. */
             shell_hold_output(s);
@@ -759,6 +763,8 @@ void shell_script_tick(shell_service_t *s) {
         shell_origin_t o = s->origin;
         shell_exec_line(s, from_file ? l : first, false, &o);
     }
+
+    shell_json_done_check(s, false);
 
     /* --script alone: a finished script that was waiting for its scheduled
      * commands ends the run once they have all fired. */

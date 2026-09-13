@@ -12,6 +12,8 @@ what the node prints.
 ./build/test_runner test configs/shell-nrf54l15-dk.yaml --script test/scripts/shell-nrf54l15.cnsh
 printf 'sendln 1 help\nexpect 1 "Shows this help" 5s\nexit\n' \
     | ./build/test_runner test configs/shell-nrf54l15-dk.yaml --shell       # piped session
+./build/test_runner test configs/shell-nrf54l15-dk.yaml -q --shell-port 7000 --shell-json &
+tools/shell-client.py 7000 'wait-until 1s' 'cmd 1 ip-addr'                  # from a program
 tools/check-shell.sh                                                       # smoke check
 python3 tools/check-shell-tty.py                                           # terminal-only paths
 ```
@@ -25,6 +27,8 @@ Every simulation mode that takes a config or firmware list (`test`,
 |---|---|
 | `--shell` | read commands from stdin.  On a terminal: line editing, history (`~/.cooja-ng_history`, or `$CSIM_SHELL_HISTORY`; empty disables), tab completion of command names.  From a pipe: lines run strictly in order, like a script (see *Pipes*), each echoed as `> cmd`; EOF = `exit`. |
 | `--script FILE` | run FILE at simulation start, with or without `--shell`.  Without `--shell` the run ends when the script passes or fails, or when it reaches its end and every `at`/`every` it scheduled has fired (or the duration ends the run). |
+| `--shell-port N` | the command stream comes from one TCP client on 127.0.0.1:N instead of stdin (implies `--shell`; `0` picks a free port).  The runner prints `shell: listening on 127.0.0.1:N` and waits for the client before the simulation starts; the client gets the shell's output and reads like a pipe (in order, deterministic); disconnecting = EOF = `exit`.  Runner output (boot lines, end-of-run statistics) stays on stdout; the script results block goes to both. |
+| `--shell-json` | the shell's output as one JSON object per line (see *Programs*); also turns off line editing on a terminal. |
 | `--paused` | start paused (needs `--shell`, `--script` or `--ui` to resume). |
 | `--speed N` / `--speed max` / `--realtime` | wall-clock pacing: N simulated seconds per wall second; `max` = unpaced (the headless default; the live UI and the serial bridge default to 10x). |
 
@@ -326,6 +330,27 @@ cmd -e "Command not found" 1 no-such-command
 cmd 1                      # a bare line: just wait for the prompt
 pass
 ```
+
+## Programs
+
+`--shell-json` is for a program driving the shell (a CI harness, a notebook).
+Each record is one line with a `type` and `t`, the simulation time in seconds:
+
+| type | fields | when |
+|---|---|---|
+| `hello` | `protocol` (1), `interactive` | at start |
+| `out` | `text` | one line of command output (tables, `echo`, notes) |
+| `error` | `text`, `where` | a command error |
+| `console` | `node`, `kind`, `line` | a node console line, for nodes in the console mask (`log on`) |
+| `done` | `line`, `ok`, `error` (when not ok) | a stdin line has finished — after its blocking wait resolves, or a file it sourced has run |
+| `result` | `status` (the exit status); `verdict`, `reason`, `expects`, `cmds` when a script or verdict command was used | the run ends |
+
+Send a line, read records until its `done`, send the next —
+`tools/shell-client.py` does exactly that.  The implied `exit` at EOF gets a
+`done` of its own.  A console line's `t` is the node's clock when it printed,
+which runs ahead of the kernel within an execution slice, so console records
+are ordered per node, not globally by `t`.  Lines on stdout that are not JSON
+objects come from the runner; `--shell-port` gives a stream with only records.
 
 ## Notes
 

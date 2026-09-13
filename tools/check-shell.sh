@@ -88,6 +88,18 @@ $BIN test $CFG -q --script "$TMP/ateof.cnsh" > "$TMP/ateof.out" 2>&1 || fail "at
 grep -q "fired-at-2s" "$TMP/ateof.out" || fail "pending at did not fire before the run ended"
 
 if command -v python3 > /dev/null; then
+    echo "== --shell-port with --shell-json (tools/shell-client.py)"
+    $BIN test $CFG -q --shell-port 0 --shell-json > "$TMP/port.log" 2>&1 &
+    for _ in $(seq 50); do grep -q "listening on" "$TMP/port.log" 2>/dev/null && break; sleep 0.1; done
+    PORT=$(sed -n 's/.*listening on 127.0.0.1:\([0-9]*\).*/\1/p' "$TMP/port.log")
+    [ -n "$PORT" ] || fail "--shell-port did not listen"
+    python3 tools/shell-client.py --json "$PORT" 'wait-until 1s' 'cmd -e "Shows this help" 1 help' \
+        'expect 1 "never printed" 100ms' > "$TMP/port.out" 2>&1 && rc=0 || rc=$?
+    [ $rc -eq 1 ] || fail "shell-client: the failed expect should give status 1"
+    wait
+    grep -q '"line":"cmd -e \\"Shows this help\\" 1 help","ok":true' "$TMP/port.out" || fail "cmd done record missing"
+    grep -q '"type":"result","t":[0-9.]*,"status":1,"verdict":"failed"' "$TMP/port.out" || fail "result record missing"
+
     echo "== terminal paths (tools/check-shell-tty.py)"
     python3 tools/check-shell-tty.py > "$TMP/tty.out" 2>&1 || { cat "$TMP/tty.out"; fail "tty checks"; }
 fi

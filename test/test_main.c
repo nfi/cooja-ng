@@ -126,7 +126,7 @@ int main(int argc, char **argv) {
         printf("Radio medium: radio-medium\n");
         printf("Radio bus:    radio-bus\n");
         printf("Test:         test <config.yaml|json> [-v] [-t ms] [--seed N] [--save-config out.yaml]\n");
-    printf("              ... [--shell] [--script FILE] [--paused] [--speed N|max|realtime]  (docs/shell.md)\n");
+    printf("              ... [--shell] [--script FILE] [--shell-port N] [--shell-json] [--paused] [--speed N|max|realtime]  (docs/shell.md)\n");
         printf("Config:       config-convert <in> <out.yaml> | config-roundtrip <config...> | config-reject <config...>\n");
         printf("Combined:     all\n");
         return 1;

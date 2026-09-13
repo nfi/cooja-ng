@@ -17,6 +17,11 @@
  * sim_service_poll_all; while the simulation is paused the loop calls
  * shell_service_pump_paused() so input is still read.
  *
+ * Programs: --shell-port N moves the command stream onto one TCP client
+ * (read like a pipe, so the run is deterministic) and --shell-json turns
+ * the shell's output into one JSON object per line, with a "done" record
+ * after each command line finishes.
+ *
  * Console lines: when the shell is active the runner's own per-line printf
  * is off and this service prints the identical "  %7.3f [Node id/KIND] text"
  * line for every node in the console mask (default: all on, all off under
@@ -186,6 +191,23 @@ typedef struct shell_service {
     int64_t prompt_ns;      /* sim time the prompt currently shows          */
     double  prompt_ms;      /* wall time of the last prompt refresh         */
 
+    /* --shell-port / --shell-json.  in_fd 0 = stdin; out NULL = stdout. */
+    int    in_fd;
+    int    port;            /* listening port, 0 = none                    */
+    FILE  *out;
+    bool   json;
+    char   json_buf[SHELL_LINE_MAX];   /* shell_out text up to its newline  */
+    int    json_len;
+    int    error_count;     /* shell_error calls, for "done" ok             */
+    char   last_error[SHELL_REASON_MAX];
+    /* The stdin line whose "done" record is still owed: emitted once the
+     * stream is idle again at (or above) the depth it ran at. */
+    bool   done_pending;
+    int    done_depth;
+    char   done_line[SHELL_LINE_MAX];
+    int    done_errors, done_fails;
+    bool   done_failed;
+
     /* Raw stdin (non-tty). */
     char   inbuf[4096];
     int    inlen;
@@ -331,11 +353,14 @@ typedef struct shell_service {
 
 /* Arm the service.  `interactive` = --shell (read stdin); `script_path` =
  * --script (may be NULL); `verbose` = the runner's flag (console mask
- * default + command echo).  Returns 0, or -1 if the script cannot be
- * opened (message printed). */
+ * default + command echo); `port` >= 0 = --shell-port (0 picks a free
+ * port): wait here for one TCP client on 127.0.0.1 and use it instead of
+ * stdin/stdout; `json` = --shell-json.  Returns 0, or -1 if the script
+ * cannot be opened or the port not served (message printed). */
 int  shell_service_start(shell_service_t *s, sim_runtime_t *sim,
                          sim_control_t *ctl, bool interactive,
-                         const char *script_path, bool verbose);
+                         const char *script_path, bool verbose,
+                         int port, bool json);
 
 static inline bool shell_service_active(const shell_service_t *s) {
     return s && s->active;

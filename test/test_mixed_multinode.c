@@ -2072,6 +2072,8 @@ int run_mixed_multinode_test(int argc, char **argv) {
     /* Shell / run-control flags (docs/shell.md).  cli_speed < 0 = not
      * given; 0 = unpaced ("max"); > 0 = sim seconds per wall second. */
     int shell_enabled = 0;
+    int shell_port = -1;          /* --shell-port: -1 = stdin */
+    int shell_json = 0;
     const char *script_path = NULL;
     int start_paused = 0;
     double cli_speed = -1.0;
@@ -2191,6 +2193,21 @@ int run_mixed_multinode_test(int argc, char **argv) {
         }
         else if (strcmp(argv[i], "--shell") == 0) {
             shell_enabled = 1;
+        }
+        else if ((strcmp(argv[i], "--shell-port") == 0 && i + 1 < argc) ||
+                 strncmp(argv[i], "--shell-port=", 13) == 0) {
+            const char *v = argv[i][12] == '=' ? argv[i] + 13 : argv[++i];
+            char *end = NULL;
+            long p = strtol(v, &end, 10);
+            if (!end || *end || p < 0 || p > 65535) {
+                fprintf(stderr, "--shell-port: expected a TCP port (0 = any free port), got '%s'\n", v);
+                return 1;
+            }
+            shell_port = (int)p;
+            shell_enabled = 1;
+        }
+        else if (strcmp(argv[i], "--shell-json") == 0) {
+            shell_json = 1;
         }
         else if (strcmp(argv[i], "--script") == 0 && i + 1 < argc) {
             script_path = argv[++i];
@@ -2352,7 +2369,8 @@ int run_mixed_multinode_test(int argc, char **argv) {
         ctl_node_count_ptr = &node_count;
         sim_control_init(&sim_ctl, &sim_rt, &ctl_ops);
         if (shell_service_start(&shell_svc, &sim_rt, &sim_ctl, shell_enabled != 0,
-                                script_path, verbose != 0) != 0)
+                                script_path, verbose != 0, shell_port,
+                                shell_json != 0) != 0)
             return 1;
         sim_service_attach(&sim_rt,
                            sim_registry_find_service(&g_registry, "shell"),

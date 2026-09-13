@@ -46,6 +46,10 @@ void shell_complete(const char *prefix, linenoiseCompletions *lc);
 /* Execute one line now (tokenize + dispatch).  `immediate_only` restricts
  * to SHELL_CMD_IMMEDIATE commands ("!" prefix while blocked).  Returns 0,
  * or -1 after printing an error. */
+/* --shell-json "done" records (shell_service.c). */
+void shell_json_done_start(shell_service_t *s, const char *line);
+void shell_json_done_check(shell_service_t *s, bool force);
+
 int  shell_exec_line(shell_service_t *s, const char *line, bool immediate_only,
                      const shell_origin_t *origin);
 /* Would this command line block the stream?  (expect, sleep, wait-until,

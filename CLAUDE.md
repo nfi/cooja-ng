@@ -104,6 +104,8 @@ GNU Lightning is optional (auto-detected via pkg-config). Without it, the interp
 ./build/test_runner test configs/shell-tz-nrf54l15-xiao.yaml --script test/scripts/tz-securefault-nrf54l15-xiao.cnsh
                                             # TrustZone from the shell: secure + `ns` shells, tz/faults,
                                             # SecureFault injected with `reg pc =`, caught by expect-fault
+./build/test_runner test configs/shell-nrf54l15-dk.yaml -q --shell-port 7000 --shell-json &   # for programs:
+tools/shell-client.py 7000 'wait-until 1s' 'cmd 1 help'    # one TCP client, JSON records, "done" per line
 ./build/test_runner shell                   # parser + script-engine unit tests (mock control bundle)
 tools/check-shell.sh                        # scripted pass/fail, piped session (sequential, deterministic),
                                             # --paused, speed change, deadlock, determinism diffs
