@@ -80,6 +80,28 @@ Times: `5s`, `250ms`, `1500us`, `1.5s`, `2m`; a bare number is milliseconds;
 | `log-file <path> [nodes]`, `log-file off [path]`, `log-file` | append nodes' console lines to a file (same line format, flushed per line); close; list |
 | `send <nodes> <text...>` | console input, escapes honoured, spacing kept as typed, no newline added |
 | `sendln <nodes> <text...>` | `send` + one `\n`, i.e. one Contiki-NG shell command (the Contiki shell ends a line on `\n` *or* `\r`, so `\r\n` would be two commands) |
+| `cmd [-e "<pat>"] [-f "<pat>"] [-t <timeout>] <node> [text...]` | `sendln`, then **block until the node prints its shell prompt** again. `-e`: the output before the prompt must contain the pattern; `-f`: it must not; either failing, or no prompt within the timeout (default `expect-timeout`), fails the script. A bare `cmd <node>` just waits for a prompt. |
+| `console <node>` | talk to one node directly (terminal only): lines you type go to the node, its console bytes come back unprefixed, other nodes' lines are hidden. Ctrl-C is sent to the node rather than ending the run. `~.` on its own line, or Ctrl-D, returns to the shell. The simulation keeps running at its current speed meanwhile. |
+
+**Prompts.**  A shell prompt has no newline, so it never becomes a log line
+that `expect` could see.  `cmd` watches the node's raw console bytes instead:
+the text since the last newline must match the glob `set prompt` (default
+`#*> `, Contiki-NG's `#<lladdr>> `; for example `"> "` for RIOT, `"uart:~$ "`
+for Zephyr), and the console must then stay quiet for 2 ms of simulated time —
+a prompt followed at once by more text on the same line is output, not the end
+of the command.  A shell that forwards to another shell may never show a usable prompt: the
+TrustZone secure world's `ns` passes the Normal world's output on one complete
+line at a time, so the Normal world's prompt only appears in front of its
+*next* output line.  Drive `ns` with `sendln` and `expect`:
+
+```
+cmd -e "Shows this help" 1 help          # the Secure world's own shell
+sendln 1 ns help                         # forwarded to the Normal world
+expect 1 "rpl-global-repair" 2s
+```
+
+Send nothing until the node's shell is up, or the line is lost and `cmd`
+times out.
 
 Input is delivered the way each platform's model paces it (nRF54L15: one
 UARTE byte per character time; MSP430: baud-paced; unconsumed bytes are
@@ -97,8 +119,8 @@ serial-line buffer) prints a warning, since the node would truncate it;
 | `at list`, `at clear <id>\|all` | list / cancel scheduled commands (`at` and `every`); `atq` and `atrm` are aliases, as in the Unix commands |
 
 `at`, `every` and `on` run one command beside the command stream, so they
-refuse the commands that would hold it: `expect`, `sleep`, `wait-until`,
-`step`, `source`, and `run` with a duration.  Put such sequences in a script.
+refuse the commands that would hold it: `cmd`, `expect`, `sleep`,
+`wait-until`, `step`, `source`, and `run` with a duration.  Put such sequences in a script.
 An error in a scheduled command fails the script only if a script file
 scheduled it, and the message names both (`at #3 (test.cnsh:4): ...`).
 
@@ -114,15 +136,15 @@ scheduled it, and the message names both (`at #3 (test.cnsh:4): ...`).
 | `fail-on "<pattern>" [nodes\|any]` | fail as soon as a console line contains the pattern |
 | `count "<pattern>" [nodes\|any]` | count matching lines from now on, for `assert count` |
 | `on <nodes\|any> "<pattern>" <command...>` | run a command whenever a line matches (e.g. `on any "SecureFault" fail "unexpected fault"`) |
-| `set [expect-timeout <duration> \| max-line <bytes>]`, `echo <text...>`, `save-config <file.yaml>`, `help [command]` | `save-config` records the time run so far as `timeout_ms` |
+| `set [expect-timeout <duration> \| max-line <bytes> \| prompt "<glob>"]`, `echo <text...>`, `save-config <file.yaml>`, `help [command]` | `save-config` records the time run so far as `timeout_ms` |
 
 ## Scripts
 
 A script is one command per line.  Commands run **sequentially in
 simulation time**: non-blocking commands run back to back at the same
-instant, a blocking command (`expect`, `sleep`, `wait-until`, `run <dur>`,
-`step`) holds the stream until it is satisfied, and then the next line runs
-at exactly that instant.  So
+instant, a blocking command (`cmd`, `expect`, `sleep`, `wait-until`,
+`run <dur>`, `step`) holds the stream until it is satisfied, and then the next
+line runs at exactly that instant.  So
 
 ```
 sendln 1 help
@@ -149,7 +171,7 @@ resume the run — a pipe, whose lines queue behind the block, or `--script`
 alone, and no web UI — the shell fails the script as a deadlock instead of
 hanging.
 
-**Exit codes.**  A script fails on an `expect` timeout, a false `assert`,
+**Exit codes.**  A script fails on an `expect` timeout, a failed `cmd`, a false `assert`,
 `fail`, a matched `fail-on`, a deadlock, or any command error on a script's
 own line (unknown node, bad syntax, unreadable `source`); the process then
 exits 1 and prints `--- Script Results ---` like the JSON test runner.
@@ -185,6 +207,17 @@ sendln 1 no-such-command
 expect 1 "Command not found" 2s
 assert count "Command not found" == 1
 assert time < 4s
+pass
+```
+
+The same test with `cmd`, `test/scripts/shell-nrf54l15-cmd.cnsh`:
+
+```
+wait-until 1s
+cmd -e "Shows this help" 1 help
+cmd -e "Node IPv6 addresses" -f "Command not found" 1 ip-addr
+cmd -e "Command not found" 1 no-such-command
+cmd 1                      # a bare line: just wait for the prompt
 pass
 ```
 

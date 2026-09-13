@@ -20,6 +20,12 @@ echo "== scripted test (pass)"
 $BIN test $CFG --script test/scripts/shell-nrf54l15.cnsh > "$TMP/pass.out" 2>&1 || fail "pass script exited non-zero"
 grep -q "SCRIPT PASSED" "$TMP/pass.out" || fail "no SCRIPT PASSED"
 
+echo "== scripted test with cmd (pass, deterministic)"
+$BIN test $CFG --script test/scripts/shell-nrf54l15-cmd.cnsh > "$TMP/cmd1.out" 2>&1 || { tail -5 "$TMP/cmd1.out"; fail "cmd script exited non-zero"; }
+grep -q "cmds:    4 passed, 0 failed" "$TMP/cmd1.out" || fail "cmd results missing"
+$BIN test $CFG --script test/scripts/shell-nrf54l15-cmd.cnsh > "$TMP/cmd2.out" 2>&1 || fail "cmd script run 2"
+diff <(strip "$TMP/cmd1.out") <(strip "$TMP/cmd2.out") > /dev/null || fail "cmd script run is not deterministic"
+
 echo "== scripted test (fail)"
 if $BIN test $CFG --script test/scripts/shell-nrf54l15-fail.cnsh > "$TMP/fail.out" 2>&1; then
     fail "fail script exited 0"

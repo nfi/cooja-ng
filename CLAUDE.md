@@ -99,6 +99,8 @@ GNU Lightning is optional (auto-detected via pkg-config). Without it, the interp
 # a pass/fail verdict (exit code), so one shell firmware serves many tests.
 ./build/test_runner test configs/shell-nrf54l15-dk.yaml --shell
 ./build/test_runner test configs/shell-nrf54l15-dk.yaml --script test/scripts/shell-nrf54l15.cnsh
+./build/test_runner test configs/shell-nrf54l15-dk.yaml --script test/scripts/shell-nrf54l15-cmd.cnsh  # `cmd`: send a
+                                            # line, wait for the node's prompt, check its output
 ./build/test_runner shell                   # parser + script-engine unit tests (mock control bundle)
 tools/check-shell.sh                        # scripted pass/fail, piped session (sequential, deterministic),
                                             # --paused, speed change, deadlock, determinism diffs
