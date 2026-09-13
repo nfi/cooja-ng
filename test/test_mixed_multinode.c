@@ -1579,6 +1579,8 @@ static bool ctl_describe(void *u, int idx, sim_control_node_info_t *o) {
     o->active      = node_active(idx) != 0;
     o->sim_time_ns = node_sim_time_ns(idx);
     o->cycles      = node_cycles(idx);
+    o->instructions = node_instructions(idx);
+    o->clock_deviation = nodes[idx].clock_deviation;
     o->freq_hz     = node_freq(idx);
     return true;
 }
@@ -1725,6 +1727,14 @@ static int save_live_config(const char *path, int timeout_ms, int64_t sim_ns) {
     }
     return save_rc;
 }
+static void ctl_stats(void *u, sim_control_stats_t *o) {
+    (void)u;
+    o->rf_bytes        = rf_byte_count;
+    o->uart_bytes      = uart_byte_count;
+    o->frames          = (long)radio_medium.next_frame_id + stat_rf_frames;
+    o->frames_collided = radio_bus.stats.frame_collided;
+    o->rx_dropped      = radio_bus.stats.rx_dropped;
+}
 static int ctl_save_config(void *u, const char *path) {
     (void)u;
     int64_t now = sim_runtime_now_ns(&sim_rt);
@@ -1744,6 +1754,7 @@ static const sim_control_ops_t ctl_ops = {
     .firmware_for_type = ctl_firmware_for_type,
     .get_interface     = ctl_get_interface,
     .save_config       = ctl_save_config,
+    .stats             = ctl_stats,
 };
 
 /* --- Simulation step for one node ---
@@ -3244,8 +3255,10 @@ sim_restart:
      * (M35: json_test service).  Returns the process exit code. */
     int test_exit_code = json_test_report(&json_test_svc, sim_ns);
     /* Script verdict (shell service): FAIL → exit 1, like the JSON test. */
-    if (shell_service_report(&shell_svc, sim_ns) != 0)
-        test_exit_code = 1;
+    {
+        int shell_rc = shell_service_report(&shell_svc, sim_ns);   /* 0, 1, or `exit N` */
+        if (shell_rc != 0) test_exit_code = shell_rc;
+    }
     /* Under --shell the run length is whatever the user ran, not -t. */
     int simulated_ms = (shell_enabled || script_path)
                        ? (int)((sim_ns - sim_start_ns) / MS_TO_NS) : sim_ms;

@@ -395,14 +395,14 @@ int main(int argc, char **argv) {
     }
 
     /* Mixed-platform mode */
-    if (strcmp(mode, "mixed-multinode") == 0) {
-        failures += run_mixed_multinode_test(argc - 2, argv + 2);
-    }
+    /* The simulation modes return the run's own exit status (0/1, or a
+     * shell `exit <status>`) instead of folding it into a failure count. */
+    if (strcmp(mode, "mixed-multinode") == 0)
+        return run_mixed_multinode_test(argc - 2, argv + 2);
 
     /* Test scripting mode (alias for mixed-multinode with test assertions) */
-    if (strcmp(mode, "test") == 0) {
-        failures += run_mixed_multinode_test(argc - 2, argv + 2);
-    }
+    if (strcmp(mode, "test") == 0)
+        return run_mixed_multinode_test(argc - 2, argv + 2);
 
     if (strcmp(mode, "config-convert") == 0)
         return run_config_convert(argc - 2, argv + 2);
