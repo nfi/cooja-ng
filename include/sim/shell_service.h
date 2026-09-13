@@ -278,6 +278,9 @@ typedef struct shell_service {
     FILE    *transcript;
     char     transcript_path[SHELL_PATH_MAX];
 
+    /* `restart` asked for; lines wait until the runner has restarted. */
+    bool     restart_pending;
+
     /* `exit <code>`: the process exit status, overriding the verdict's. */
     bool     exit_code_set;
     int      exit_code;
