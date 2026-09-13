@@ -34,6 +34,10 @@ grep -q "took SecureFault" "$TMP/tz1.out" || fail "SecureFault not observed"
 $BIN test $TZCFG --script $TZS > "$TMP/tz2.out" 2>&1 || fail "TrustZone script run 2"
 diff <(strip "$TMP/tz1.out") <(strip "$TMP/tz2.out") > /dev/null || fail "TrustZone script run is not deterministic"
 
+echo "== breakpoints and watchpoints (TrustZone Normal world)"
+$BIN test $TZCFG -t 30000 --script test/scripts/debug-nrf54l15-xiao.cnsh > "$TMP/dbg.out" 2>&1 || { tail -5 "$TMP/dbg.out"; fail "debug script exited non-zero"; }
+grep -q "^watchpoint #2: node 1" "$TMP/dbg.out" || fail "watchpoint hit not reported"
+
 echo "== scripted test (fail)"
 if $BIN test $CFG --script test/scripts/shell-nrf54l15-fail.cnsh > "$TMP/fail.out" 2>&1; then
     fail "fail script exited 0"

@@ -49,6 +49,7 @@ typedef enum sim_mote_diag {
 typedef enum sim_mote_iface {
     SIM_MOTE_IFACE_ARM_CPU = 1,  /* arm_cpu_t*  — GDB stub attach    */
     SIM_MOTE_IFACE_CC2420  = 2,  /* cc2420_t*   — CC2420 chip state  */
+    SIM_MOTE_IFACE_MSP430_CPU = 3, /* msp430_cpu_t* — shell mem/reg     */
     SIM_MOTE_IFACE_COSIM_DEV = 3,  /* a co-simulation device's register
                                     * window; how a co-simulation service
                                     * reaches it without including the
