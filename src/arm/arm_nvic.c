@@ -118,6 +118,10 @@ static int nvic_read(void *user_data, uint32_t addr) {
             return nvic->shpr[8] | (nvic->shpr[9] << 8) |
                    (nvic->shpr[10] << 16) | (nvic->shpr[11] << 24);
         case SCB_SHCSR: return (int)nvic->shcsr;
+        case SCB_CFSR:  return (int)nvic->cpu->cfsr;
+        case SCB_HFSR:  return (int)nvic->cpu->hfsr;
+        case SCB_MMFAR:
+        case SCB_BFAR:  return (int)nvic->cpu->bfar;   /* one physical register */
         case SCB_DEMCR: return (int)nvic->cpu->demcr;
 
         /* SAU — Secure-only; reads as zero (RAZ) from Non-secure. */
@@ -303,6 +307,10 @@ static void nvic_write(void *user_data, uint32_t addr, uint32_t value) {
         case SCB_SHCSR:
             nvic->shcsr = value;
             break;
+        case SCB_CFSR:  nvic->cpu->cfsr &= ~value; break;   /* write-1-to-clear */
+        case SCB_HFSR:  nvic->cpu->hfsr &= ~value; break;
+        case SCB_MMFAR:
+        case SCB_BFAR:  nvic->cpu->bfar = value; break;
         case SCB_DEMCR:
             /* TRCENA clocks the trace block (DWT); the debug-monitor and
              * vector-catch bits are stored but have no effect here. */

@@ -19,7 +19,9 @@
 static void flpr_costep(void *coproc, int64_t delta_cycles) {
     riscv_cpu_t *rv = (riscv_cpu_t *)coproc;
     if (!rv || delta_cycles <= 0) return;
+    rv->bus->coproc_bus_active = true;    /* its refused accesses are not M33 BusFaults */
     riscv_step_until(rv, rv->cycles + delta_cycles);
+    rv->bus->coproc_bus_active = false;
 }
 
 /* GRTC (or any SoC peripheral in the FLPR's IRQ group) raises an interrupt:

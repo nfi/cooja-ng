@@ -30,6 +30,16 @@
 #define SCB_SHPR2   0xD1C  /* System Handler Priority Register 2 */
 #define SCB_SHPR3   0xD20  /* System Handler Priority Register 3 */
 #define SCB_SHCSR   0xD24  /* System Handler Control and State Register */
+#define SCB_CFSR    0xD28  /* Configurable Fault Status (MMFSR|BFSR|UFSR), W1C */
+#define SCB_HFSR    0xD2C  /* HardFault Status, W1C */
+#define SCB_MMFAR   0xD34  /* MemManage Fault Address (same register as BFAR here) */
+#define SCB_BFAR    0xD38  /* BusFault Address */
+
+#define ARM_SHCSR_BUSFAULTENA (1u << 17)
+#define ARM_AIRCR_BFHFNMINS   (1u << 13)
+#define ARM_CFSR_PRECISERR    (1u << 9)    /* BFSR.PRECISERR */
+#define ARM_CFSR_BFARVALID    (1u << 15)   /* BFSR.BFARVALID */
+#define ARM_HFSR_FORCED       (1u << 30)
 #define SCB_CPUID   0xD00  /* CPUID Base Register */
 #define SCB_DEMCR   0xDFC  /* Debug Exception and Monitor Control (TRCENA) */
 

@@ -2116,6 +2116,33 @@ static void test_trustzone_tt(void) {
     arm_step(&cpu, 1);
     assert_true("TT on Secure addr: S bit set", (cpu.reg[0] & (1u << 22)) != 0);
 
+    /* From Non-secure state the Secure boundaries are not disclosed: S,
+     * SREGION and SRVALID read as zero for both a Secure and a Non-secure
+     * address. Region 1 makes the code itself fetchable Non-secure. */
+    {
+        arm_cpu_t ns;
+        setup_arm(&ns);
+        ns.tz_enabled = true;
+        ns.secure = false;
+        ns.sau_sregions = 8;
+        ns.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        ns.sau_rbar[0] = 0x20000000;
+        ns.sau_rlar[0] = (0x2000FFFF & ~0x1fu) | ARM_SAU_RLAR_ENABLE;
+        ns.sau_rbar[1] = CODE_BASE & ~0x1fu;
+        ns.sau_rlar[1] = ((CODE_BASE + 0xFFu) & ~0x1fu) | ARM_SAU_RLAR_ENABLE;
+        write_thumb32(&ns, CODE_BASE, 0xE841, 0xF000);
+        ns.reg[ARM_PC] = CODE_BASE;
+        ns.reg[1] = 0x00001000;                   /* Secure */
+        arm_step(&ns, 1);
+        assert_eq("TT from NS on Secure addr: S/SREGION/SRVALID zero",
+                  0, (int)(ns.reg[0] & ((1u << 22) | (1u << 17) | 0xFF00u)));
+        ns.reg[ARM_PC] = CODE_BASE;
+        ns.reg[1] = 0x20008000;                   /* Non-secure, region 0 */
+        arm_step(&ns, 1);
+        assert_eq("TT from NS on NS addr: SREGION/SRVALID zero",
+                  0, (int)(ns.reg[0] & ((1u << 17) | 0xFF00u)));
+    }
+
     /* A normal LDRD (same hw1 range) must NOT be caught by the TT decode:
      * hw2 top nibble is a real register, not 0xF. Sanity: TT gate is inert
      * for the whole suite (test_ldrd_strd already exercises LDRD). */
@@ -2184,7 +2211,12 @@ static void test_trustzone_transitions(void) {
         setup_arm(&cpu2);
         cpu2.tz_enabled = true;
         cpu2.secure = false;
-        cpu2.sau_sregions = 8;          /* SAU disabled => flash is Secure, not NSC */
+        cpu2.sau_sregions = 8;
+        /* The gateway sits in ordinary Non-secure memory, not in a callable
+         * region: reachable by Non-secure code, but not a valid entry point. */
+        cpu2.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu2.sau_rbar[0] = CODE_BASE & ~0x1Fu;
+        cpu2.sau_rlar[0] = ((CODE_BASE + 0xFFu) & ~0x1Fu) | ARM_SAU_RLAR_ENABLE;
         write_thumb32(&cpu2, CODE_BASE, 0xE97F, 0xE97F);
         cpu2.reg[ARM_PC] = CODE_BASE;
         arm_step(&cpu2, 1);
@@ -2244,9 +2276,13 @@ static void test_trustzone_secure_exception(void) {
     cpu.use_psp = false;
     cpu.sau_sregions = 8;
     cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
-    /* Mark all of SRAM Non-secure; flash stays Secure. */
+    /* Mark all of SRAM Non-secure, and the code area too — Non-secure code
+     * has to be fetched from Non-secure memory. The load target below stays
+     * outside both regions, so it remains Secure and is what faults. */
     cpu.sau_rbar[0] = 0x20000000;
     cpu.sau_rlar[0] = (0x20007FFF & ~0x1fu) | ARM_SAU_RLAR_ENABLE;
+    cpu.sau_rbar[1] = ARM_FLASH_BASE & ~0x1Fu;
+    cpu.sau_rlar[1] = ((ARM_FLASH_BASE + 0xFFFFu) & ~0x1Fu) | ARM_SAU_RLAR_ENABLE;
 
     /* Secure vector table at flash base; SecureFault (exc 7) handler. */
     cpu.vtor_s = ARM_FLASH_BASE;
@@ -2271,6 +2307,82 @@ static void test_trustzone_secure_exception(void) {
     assert_true("SecureFault return: back to Non-secure", !cpu.secure);
     assert_eq("SecureFault return: PC = instr after LDR", CODE_BASE + 2,
               cpu.reg[ARM_PC]);
+}
+
+/* Bus-side permission refusal: the transaction is terminated with a precise
+ * BusFault taken into the Secure world (BFHFNMINS clear), CFSR/BFAR name it,
+ * and exception return resumes Non-secure after the instruction. With
+ * SHCSR.BUSFAULTENA clear it escalates to HardFault (HFSR.FORCED). Matches
+ * a Seeed XIAO nRF54L15: CFSR 0x8200, BFAR = the Non-secure alias. */
+static bool refuse_0x40001000(void *user, uint32_t addr, bool is_write) {
+    (void)user; (void)is_write;
+    return (addr & ~0xFFFu) != 0x40001000u;
+}
+static void test_trustzone_bus_fault(void) {
+    if (verbose) printf("--- ARMv8-M TrustZone bus-permission BusFault tests ---\n");
+    for (int escalate = 0; escalate < 2; escalate++) {
+        arm_cpu_t cpu;
+        setup_arm(&cpu);
+        arm_nvic_t nvic;
+        arm_nvic_init(&nvic, &cpu);
+        cpu.tz_enabled = true;
+        cpu.secure = false;
+        cpu.use_psp = false;
+        cpu.sau_sregions = 8;
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu.sau_rbar[0] = 0x20000000;
+        cpu.sau_rlar[0] = (0x20007FFF & ~0x1fu) | ARM_SAU_RLAR_ENABLE;
+        cpu.sau_rbar[1] = ARM_FLASH_BASE & ~0x1Fu;
+        cpu.sau_rlar[1] = ((ARM_FLASH_BASE + 0xFFFFu) & ~0x1Fu) | ARM_SAU_RLAR_ENABLE;
+        cpu.sau_rbar[2] = 0x40000000;                     /* peripheral aliases: NS */
+        cpu.sau_rlar[2] = (0x4FFFFFFF & ~0x1fu) | ARM_SAU_RLAR_ENABLE;
+        cpu.io_ns_alias = true;
+        cpu.io_access_check = refuse_0x40001000;
+        if (!escalate) nvic.shcsr |= ARM_SHCSR_BUSFAULTENA;
+
+        /* Secure vector table: BusFault (5) and HardFault (3) handlers. */
+        cpu.vtor_s = ARM_FLASH_BASE;
+        write_flash32(&cpu, ARM_FLASH_BASE + EXC_BUSFAULT * 4, (CODE_BASE + 0x40) | 1);
+        write_flash32(&cpu, ARM_FLASH_BASE + EXC_HARDFAULT * 4, (CODE_BASE + 0x60) | 1);
+        write_thumb16(&cpu, CODE_BASE + 0x40, 0x4770);   /* BX LR */
+        write_thumb16(&cpu, CODE_BASE + 0x60, 0x4770);   /* BX LR */
+
+        write_thumb16(&cpu, CODE_BASE, 0x6808);          /* LDR r0, [r1] */
+        cpu.reg[ARM_PC] = CODE_BASE;
+        cpu.reg[1] = 0x40001504;                         /* refused NS alias */
+        cpu.reg[ARM_SP] = 0x20007F00;
+        cpu.msp_s = 0x20007000;
+
+        arm_step(&cpu, 1);
+        if (!escalate) {
+            assert_true("BusFault taken: now Secure", cpu.secure);
+            assert_eq("BusFault: PC = Secure BusFault handler", CODE_BASE + 0x40, cpu.reg[ARM_PC]);
+            assert_eq("BusFault: IPSR = 5", EXC_BUSFAULT, (int)(cpu.xpsr & 0x1FF));
+            assert_eq("BusFault: CFSR = PRECISERR|BFARVALID", 0x8200, (int)arm_read32(&cpu, 0xE000ED28));
+            assert_eq("BusFault: BFAR = address as issued", 0x40001504, arm_read32(&cpu, 0xE000ED38));
+            assert_eq("BusFault: no SecureFault recorded", 0, (int)cpu.sfsr);
+            arm_write32(&cpu, 0xE000ED28, 0x8200);       /* W1C */
+            assert_eq("BusFault: CFSR write-1-to-clear", 0, (int)arm_read32(&cpu, 0xE000ED28));
+            arm_step(&cpu, 1);
+            assert_true("BusFault return: back to Non-secure", !cpu.secure);
+            assert_eq("BusFault return: PC = instr after LDR", CODE_BASE + 2, cpu.reg[ARM_PC]);
+        } else {
+            assert_eq("BusFault disabled: HardFault handler", CODE_BASE + 0x60, cpu.reg[ARM_PC]);
+            assert_eq("BusFault disabled: HFSR.FORCED", (int)ARM_HFSR_FORCED,
+                      (int)(arm_read32(&cpu, 0xE000ED2C) & ARM_HFSR_FORCED));
+            assert_true("BusFault disabled: taken Secure", cpu.secure);
+        }
+
+        /* The Secure alias of the same peripheral is not a Non-secure
+         * transaction: the check passes and nothing faults. */
+        cpu.secure = true;
+        cpu.cfsr = 0;
+        cpu.reg[1] = 0x50001504;
+        cpu.reg[ARM_PC] = CODE_BASE;
+        cpu.xpsr &= ~0x1FFu;
+        arm_step(&cpu, 1);
+        assert_eq("Secure alias: no BusFault", 0, (int)cpu.cfsr);
+    }
 }
 
 /* Step 5: NVIC target-security (NVIC_ITNS) decides an IRQ's security state. */
@@ -2315,6 +2427,13 @@ static void test_trustzone_blxns(void) {
         cpu.secure = true;
         cpu.use_psp = false;
         cpu.sau_sregions = 8;
+        /* The callee runs Non-secure, so the memory it executes from has to
+         * be attributed Non-secure or the fetch is refused — as it would be
+         * on hardware. One SAU region covering the whole code and data area
+         * is the least this exercise needs. */
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu.sau_rbar[0] = CODE_BASE & ~0x1Fu;
+        cpu.sau_rlar[0] = (0x2000FFFFu & ~0x1Fu) | ARM_SAU_RLAR_ENABLE;
         cpu.reg[ARM_SP] = 0x20007F00;    /* Secure stack (SRAM) */
         cpu.msp_ns = 0x20006F00;         /* Non-secure stack */
 
@@ -2347,6 +2466,13 @@ static void test_trustzone_blxns(void) {
         cpu.tz_enabled = true;
         cpu.secure = true;
         cpu.sau_sregions = 8;
+        /* The callee runs Non-secure, so the memory it executes from has to
+         * be attributed Non-secure or the fetch is refused — as it would be
+         * on hardware. One SAU region covering the whole code and data area
+         * is the least this exercise needs. */
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu.sau_rbar[0] = CODE_BASE & ~0x1Fu;
+        cpu.sau_rlar[0] = (0x2000FFFFu & ~0x1Fu) | ARM_SAU_RLAR_ENABLE;
         cpu.reg[ARM_SP] = 0x20007F00;
         cpu.msp_ns = 0x20006F00;
         write_thumb16(&cpu, CODE_BASE, 0x4784);          /* BLXNS r0 */
@@ -2364,6 +2490,110 @@ static void test_trustzone_blxns(void) {
                     (cpu.sfsr & ARM_SFSR_INVIS) != 0);
         assert_true("tampered signature: returned to Secure to fault",
                     cpu.secure);
+    }
+}
+
+/* Non-secure code must not execute from Secure memory, and may fetch from
+ * the non-secure-callable window only what a gateway entry is: SG. The check
+ * is cached per uniformly-attributed window, so a page holding both
+ * Non-secure and Secure memory must still refuse the Secure half. */
+static void test_trustzone_ns_fetch(void) {
+    if (verbose) printf("--- ARMv8-M TrustZone Non-secure fetch tests ---\n");
+
+    /* Secure memory: refused before the instruction executes, as an invalid
+     * entry point. INVEP names no address. */
+    {
+        arm_cpu_t cpu;
+        setup_arm(&cpu);
+        cpu.tz_enabled = true;
+        cpu.secure = false;
+        cpu.sau_sregions = 8;
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;   /* no region => all Secure */
+        write_thumb16(&cpu, CODE_BASE, 0x2001);   /* MOVS r0, #1 */
+        cpu.reg[0] = 0;
+        cpu.reg[ARM_PC] = CODE_BASE;
+        arm_step(&cpu, 1);
+        assert_true("NS fetch from Secure: SFSR.INVEP recorded",
+                    (cpu.sfsr & ARM_SFSR_INVEP) != 0);
+        assert_true("NS fetch from Secure: not INVTRAN, no SFAR",
+                    (cpu.sfsr & (ARM_SFSR_INVTRAN | ARM_SFSR_SFARVALID)) == 0);
+        assert_eq("NS fetch from Secure: instruction did not execute",
+                  0, (int)cpu.reg[0]);
+    }
+
+    /* Non-secure-callable memory: anything but SG is an invalid entry point. */
+    {
+        arm_cpu_t cpu;
+        setup_arm(&cpu);
+        cpu.tz_enabled = true;
+        cpu.secure = false;
+        cpu.sau_sregions = 8;
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu.sau_rbar[0] = CODE_BASE & ~0x1Fu;
+        cpu.sau_rlar[0] = ((CODE_BASE + 0xFFu) & ~0x1Fu) |
+                          ARM_SAU_RLAR_ENABLE | ARM_SAU_RLAR_NSC;
+        write_thumb16(&cpu, CODE_BASE, 0x2001);   /* MOVS r0, #1 */
+        cpu.reg[0] = 0;
+        cpu.reg[ARM_PC] = CODE_BASE;
+        arm_step(&cpu, 1);
+        assert_true("NS non-SG fetch from NSC: SFSR.INVEP recorded",
+                    (cpu.sfsr & ARM_SFSR_INVEP) != 0);
+        assert_eq("NS non-SG fetch from NSC: instruction did not execute",
+                  0, (int)cpu.reg[0]);
+    }
+
+    /* Non-secure-callable memory: SG is the one legal fetch, and it enters
+     * the Secure world. */
+    {
+        arm_cpu_t cpu;
+        setup_arm(&cpu);
+        cpu.tz_enabled = true;
+        cpu.secure = false;
+        cpu.sau_sregions = 8;
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu.sau_rbar[0] = CODE_BASE & ~0x1Fu;
+        cpu.sau_rlar[0] = ((CODE_BASE + 0xFFu) & ~0x1Fu) |
+                          ARM_SAU_RLAR_ENABLE | ARM_SAU_RLAR_NSC;
+        cpu.reg[ARM_SP] = 0x20010000;
+        cpu.msp_s = 0x30010000;
+        write_thumb32(&cpu, CODE_BASE, 0xE97F, 0xE97F);   /* SG */
+        cpu.reg[ARM_PC] = CODE_BASE;
+        arm_step(&cpu, 1);
+        assert_true("NS SG fetch from NSC: no fault", cpu.sfsr == 0);
+        assert_true("NS SG fetch from NSC: now Secure", cpu.secure);
+        assert_eq("NS SG fetch from NSC: SG counted", 1, (int)cpu.tz_sg_count);
+    }
+
+    /* Mixed page: the first 128 bytes at CODE_BASE are Non-secure, the rest
+     * of the page Secure. A branch that stays in the Non-secure half runs; a
+     * branch into the Secure half of the SAME page is refused, so the cached
+     * decision must stop at the region boundary, not at the page. */
+    {
+        arm_cpu_t cpu;
+        setup_arm(&cpu);
+        cpu.tz_enabled = true;
+        cpu.secure = false;
+        cpu.sau_sregions = 8;
+        cpu.sau_ctrl = ARM_SAU_CTRL_ENABLE;
+        cpu.sau_rbar[0] = CODE_BASE;
+        cpu.sau_rlar[0] = (CODE_BASE + 0x7Fu & ~0x1Fu) | ARM_SAU_RLAR_ENABLE;
+        write_thumb16(&cpu, CODE_BASE,        0x2001);   /* MOVS r0, #1 */
+        write_thumb16(&cpu, CODE_BASE + 2,    0xE01D);   /* B +0x40 -> CODE_BASE+0x40 */
+        write_thumb16(&cpu, CODE_BASE + 0x40, 0x2101);   /* MOVS r1, #1 */
+        write_thumb16(&cpu, CODE_BASE + 0x42, 0xE01D);   /* B +0x40 -> CODE_BASE+0x80 */
+        write_thumb16(&cpu, CODE_BASE + 0x80, 0x2201);   /* MOVS r2, #1 (Secure) */
+        cpu.reg[0] = cpu.reg[1] = cpu.reg[2] = 0;
+        cpu.reg[ARM_PC] = CODE_BASE;
+        arm_step(&cpu, 3);
+        assert_eq("mixed page: NS half runs", 1, (int)cpu.reg[0]);
+        assert_eq("mixed page: same-page NS branch runs", 1, (int)cpu.reg[1]);
+        assert_eq("mixed page: cached window ends at the region limit",
+                  0x80, (int)cpu.fetch_ok_len);
+        assert_true("mixed page: no fault so far", cpu.sfsr == 0);
+        arm_step(&cpu, 2);
+        assert_true("mixed page: same-page branch into Secure: INVEP",
+                    (cpu.sfsr & ARM_SFSR_INVEP) != 0);
+        assert_eq("mixed page: Secure half did not execute", 0, (int)cpu.reg[2]);
     }
 }
 
@@ -2482,6 +2712,8 @@ int run_arm_correctness_tests(int v) {
     test_trustzone_nvic_itns();
     test_trustzone_instrumentation();
     test_trustzone_blxns();
+    test_trustzone_ns_fetch();
+    test_trustzone_bus_fault();
     test_io_lookup();
 
     printf("\n--- Results: %d passed, %d failed ---\n\n", passed, failed);
